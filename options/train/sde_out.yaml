@@ -14,6 +14,16 @@ RESUME:
   SET_EPOCH: false
 SEED: 2333
 IS_CUDA: true
+
+# ============== WandB 配置 ==============
+WANDB:
+  enabled: true                    # 是否启用 wandb
+  project: "EvLight0-2"            # wandb 项目名
+  run_name: null                   # 运行名称 (null 则自动生成)
+  log_images_every: 100            # 每多少步记录一次图像
+  max_images_per_log: 2            # 每次最多记录几张图像
+WANDB_LOG_IMAGES_INTERVAL: 100     # 训练时图像记录间隔 (batch)
+WANDB_VAL_LOG_IMAGES_INTERVAL: 50  # 验证时图像记录间隔 (batch)
 OPTIMIZER:
   NAME: "Adam"
   LR: 0.00015
@@ -34,7 +44,7 @@ METRICS:
     input_is_linear: false
 DATASET:
   NAME: get_eglol_withNE_dataset
-  root: "" # file path of dataset
+  root: "/home/wzy/SDE/SDE_outdoor/sde_out_release" # file path of dataset
   voxel_grid_channel: 32
   img_height: 260
   img_width: 346

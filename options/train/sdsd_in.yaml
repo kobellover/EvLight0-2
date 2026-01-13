@@ -34,7 +34,7 @@ METRICS:
     input_is_linear: false
 DATASET:
   NAME: get_egsdsd_withNE_dataset
-  root: "" # file path of dataset
+  root: "/home/wzy/datasets/SDSD_synthetic_event/SDSD_indoor/SDSD_in_2_release" # file path of dataset
   voxel_grid_channel: 32
   img_height: 260
   img_width: 346

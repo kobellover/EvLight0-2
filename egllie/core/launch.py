@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from egllie.core.optimizer import Optimizer
+from egllie.core.wandb_logger import create_wandb_logger, WandbLogger
 from egllie.datasets import get_dataset
 from egllie.losses import get_loss,AverageMeter,get_metric
 from egllie.models import get_model
@@ -92,6 +93,9 @@ class Visualization:
         for b in range(B):
             video_name = inputs["seq_name"][b]
             frame_name = inputs["frame_id"][b]
+            # 只保存i_24序列的图片
+            if video_name != "i_24":
+                continue
             testfolder = join(self.saving_folder, video_name)
             os.makedirs(testfolder, exist_ok=True)
             # save output
@@ -126,6 +130,8 @@ class ParallelLaunch:
         np.random.seed(config.SEED)
         # 1.2 init the tensorboard log dir
         self.tb_recoder = SummaryWriter(FLAGS.log_dir)
+        # 1.3 init wandb logger
+        self.wandb_logger = create_wandb_logger(config, FLAGS.log_dir)
         # 2. VISUALIZE setting
         self.visualizer = None
         if config.VISUALIZE:
@@ -189,6 +195,13 @@ class ParallelLaunch:
         if self.config.TEST_ONLY:
             self.valid(val_loader, model, criterion, metrics, 0)
             return
+        
+        # 3.5 从训练集中均匀采样 5 张固定样本 (用于可视化训练过程)
+        self.wandb_logger.set_fixed_samples_from_dataset(train_dataset, num_samples=5)
+        
+        # 3.6 初始化全局 step 计数器 (WandB 要求 step 单调递增)
+        self.global_step = 0
+        
         # 4. train
         min_loss = 123456789.0
         for epoch in range(self.config.START_EPOCH, self.config.END_EPOCH):
@@ -247,11 +260,11 @@ class ParallelLaunch:
         time_recoder = time.time()
         scaler = torch.cuda.amp.GradScaler()
         
-        
         for index, batch in enumerate(train_loader):
             if self.config.IS_CUDA:
                 batch = move_tensors_to_cuda(batch)
             batch = rot_aug(batch)
+            
             if self.config.MIX_PRECISION:
                 with torch.cuda.amp.autocast():
                     outputs = model(batch)
@@ -274,6 +287,7 @@ class ParallelLaunch:
                 # 2.3 update weights
                 opt.step()
                 opt.zero_grad()
+            
             # 2.4 update measure
             # 2.4.1 time update
             now = time.time()
@@ -289,6 +303,7 @@ class ParallelLaunch:
                 if isinstance(measure_item, torch.Tensor):
                     measure_item = measure_item.detach().item()
                 metric_meter[name].update(measure_item)
+            
             # 2.5 log
             if index % self.config.LOG_INTERVAL == 0:
                 info(
@@ -298,6 +313,14 @@ class ParallelLaunch:
                     info(f"    loss:    {name}: {meter.avg}")
                 for name, measure in metric_meter.items():
                     info(f"    measure: {name}: {measure.avg}")
+                
+                # 2.5.1 wandb 实时记录标量指标 (使用全局单调递增 step)
+                step_losses = {name: meter.avg for name, meter in losses_meter.items()}
+                step_metrics = {name: meter.avg for name, meter in metric_meter.items()}
+                self.wandb_logger.log_scalars(step_losses, step=self.global_step, prefix="train/loss/")
+                self.wandb_logger.log_scalars(step_metrics, step=self.global_step, prefix="train/metric/")
+                self.global_step += 1
+        
         # 3. record a training epoch
         # 3.1 record epoch time
         epoch_time = time.time() - start_time
@@ -309,12 +332,33 @@ class ParallelLaunch:
         self.tb_recoder.add_scalar(f"Train/EpochTime", epoch_time, epoch)
         self.tb_recoder.add_scalar(f"Train/BatchTime", batch_time, epoch)
         self.tb_recoder.add_scalar(f"Train/LR", opt.get_lr(), epoch)
+        
+        # 收集 wandb 指标
+        wandb_losses = {}
+        wandb_metrics = {}
+        
         for name, meter in losses_meter.items():
             info(f"    loss:    {name}: {meter.avg}")
             self.tb_recoder.add_scalar(f"Train/{name}", meter.avg, epoch)
+            wandb_losses[name] = meter.avg
         for name, measure in metric_meter.items():
             info(f"    measure: {name}: {measure.avg}")
             self.tb_recoder.add_scalar(f"Train/{name}", measure.avg, epoch)
+            wandb_metrics[name] = measure.avg
+        
+        # 记录到 wandb
+        self.wandb_logger.log_metrics(
+            losses=wandb_losses,
+            metrics=wandb_metrics,
+            epoch=epoch,
+            phase="train"
+        )
+        # 额外记录学习率
+        self.wandb_logger.log_scalars({"lr": opt.get_lr()}, step=self.global_step, prefix="train/")
+        
+        # 使用固定样本记录训练进度可视化 (观察同一图像在不同 epoch 的变化)
+        self.wandb_logger.log_fixed_samples_progress(model, epoch, self.global_step, device='cuda')
+        
         # adjust learning rate
         opt.lr_schedule()
 
@@ -332,9 +376,9 @@ class ParallelLaunch:
         metric_meter = {}
         for config in self.config.METRICS:
             metric_meter[config.NAME] = AverageMeter(f"Valid/{config.NAME}")
-              
 
         batch_time_meter = AverageMeter("Valid/BatchTime")
+        
         # 2. start a validating epoch
         time_recoder = time.time()
         start_time = time_recoder
@@ -342,6 +386,7 @@ class ParallelLaunch:
             for index, batch in enumerate(valid_loader):
                 if self.config.IS_CUDA:
                     batch = move_tensors_to_cuda(batch)
+                
                 if self.config.MIX_PRECISION:
                     with torch.cuda.amp.autocast():
                         outputs = model(batch)
@@ -359,6 +404,7 @@ class ParallelLaunch:
                 # 2.3 visualization
                 if self.visualizer:
                     self.visualizer.visualize(batch,outputs)
+                
                 # 2.4. update measure
                 now = time.time()
                 batch_time_meter.update(now - time_recoder)
@@ -393,6 +439,13 @@ class ParallelLaunch:
                         info(f"    loss:    {name}: {meter.avg}")
                     for name, measure in metric_meter.items():
                         info(f"    measure: {name}: {measure.avg}")
+                    
+                    # wandb 实时记录验证指标 (使用全局单调递增 step)
+                    step_losses = {name: meter.avg for name, meter in losses_meter.items()}
+                    step_metrics = {name: meter.avg for name, meter in metric_meter.items()}
+                    self.wandb_logger.log_scalars(step_losses, step=self.global_step, prefix="val/loss/")
+                    self.wandb_logger.log_scalars(step_metrics, step=self.global_step, prefix="val/metric/")
+                    self.global_step += 1
                 del batch,outputs
                 torch.cuda.empty_cache()
 
@@ -406,10 +459,26 @@ class ParallelLaunch:
         )
         self.tb_recoder.add_scalar(f"Valid/EpochTime", epoch_time, epoch)
         self.tb_recoder.add_scalar(f"Valid/BatchTime", batch_time, epoch)
+        
+        # 收集 wandb 指标
+        wandb_losses = {}
+        wandb_metrics = {}
+        
         for name, meter in losses_meter.items():
             info(f"    loss:    {name}: {meter.avg}")
             self.tb_recoder.add_scalar(f"Valid/{name}", meter.avg, epoch)
+            wandb_losses[name] = meter.avg
         for name, measure in metric_meter.items():
             info(f"    measure: {name}: {measure.avg}")
             self.tb_recoder.add_scalar(f"Valid/{name}", measure.avg, epoch)
+            wandb_metrics[name] = measure.avg
+        
+        # 记录到 wandb
+        self.wandb_logger.log_metrics(
+            losses=wandb_losses,
+            metrics=wandb_metrics,
+            epoch=epoch,
+            phase="val"
+        )
+        
         return losses_meter["total"].avg

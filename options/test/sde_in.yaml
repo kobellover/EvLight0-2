@@ -9,7 +9,7 @@ VAL_INTERVAL: 1
 MODEL_SANING_INTERVAL: 5
 MIX_PRECISION: true
 RESUME:
-  PATH: "" # file path of pretrained model
+  PATH: "/home/wzy/EvLight/log/train/sde_in/model_best.pth.tar" # file path of pretrained model
   TYPE:
   SET_EPOCH: false
 SEED: 2333
@@ -34,7 +34,7 @@ METRICS:
     input_is_linear: false
 DATASET:
   NAME: get_eglol_withNE_dataset
-  root: "" # file path of dataset
+  root: "/home/wzy/SDE/SDE_indoor/sde_in_release" # file path of dataset
   voxel_grid_channel: 32
   img_height: 260
   img_width: 346
