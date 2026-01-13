@@ -9,7 +9,7 @@ VAL_INTERVAL: 1
 MODEL_SANING_INTERVAL: 5
 MIX_PRECISION: true
 RESUME:
-  PATH: "/home/wzy/EvLight/log/train/sde_in/model_best.pth.tar" # file path of pretrained model
+  PATH: "/home/wzy/EvLight0-2/log/train/sde_in_online/model_best.pth.tar" # file path of pretrained model
   TYPE:
   SET_EPOCH: false
 SEED: 2333

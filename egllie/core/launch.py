@@ -191,16 +191,16 @@ class ParallelLaunch:
             pin_memory=True,
             drop_last=True,
         )
-        # 3. if test only
+        # 3. 初始化全局 step 计数器 (WandB 要求 step 单调递增)
+        self.global_step = 0
+        
+        # 3.1 if test only
         if self.config.TEST_ONLY:
             self.valid(val_loader, model, criterion, metrics, 0)
             return
         
         # 3.5 从训练集中均匀采样 5 张固定样本 (用于可视化训练过程)
         self.wandb_logger.set_fixed_samples_from_dataset(train_dataset, num_samples=5)
-        
-        # 3.6 初始化全局 step 计数器 (WandB 要求 step 单调递增)
-        self.global_step = 0
         
         # 4. train
         min_loss = 123456789.0
